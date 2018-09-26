@@ -1,0 +1,1479 @@
+---
+title: "A Biomarker approach for predicting survival using metabolite signature"
+author: "Olajumoke Owokotomo Eva,Karolien Vanhove, Peter Adriaensens and Ziv Shkedy"
+date: "26 September 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(aBioMarVsuit)
+library(glmnet)
+library(xtable) 
+library(matrixStats)
+library(readxl)
+library(survminer)
+library(survival)
+library(rms)
+library(dplyr)
+library(plyr)
+library(tidyr)
+library(kableExtra)
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+``` {r A}
+Eva <- read_excel("~/Documents/PHD/LUNGCANCER/SURVIVAL/WITHOUT NOISE/DEFINITIEVESETSURVIVALWITHOUTNOISYVAR.xlsx")
+```
+
+
+``` {r B, echo=FALSE}
+Eva = as.data.frame(Eva)
+Eva_metabolite = Eva[,15:113]
+Eva_metabolite = as.data.frame(Eva_metabolite)
+
+Data_Survival <- read_excel("~/Documents/PHD/LUNGCANCER/SURVIVAL/WITHOUT NOISE/Data - Survival.xlsx")
+Data_Survival = as.data.frame(Data_Survival)
+Eva$SUVMAX = Data_Survival$SUVMAX
+rm(Data_Survival)
+
+Evangelina <- read_excel("~/Documents/PHD/LUNGCANCER/SURVIVAL/WITHOUT NOISE/Dataset2withchanges.xlsx")
+Evangelina = as.data.frame(Evangelina)
+setdiff(names(Evangelina),names(Eva))[6:16]
+``` 
+
+``` {r C, echo=FALSE}
+names(Eva)[14] = "Diabetes"
+
+Eva$Indicator2 <- ifelse(Eva$Death =="yes", 1, 0)
+Eva$Indicator2 <- as.numeric(Eva$Indicator2)
+
+Eva$Stage2 = ifelse(Eva$Stage =="IA" | Eva$Stage =="IB" | Eva$Stage =="IIA" | Eva$Stage =="IIB" | Eva$Stage =="IIIA","early", "advanced")
+
+Eva$HISTOLOGY = as.factor(Eva$HISTOLOGY)
+Eva$Stage = as.factor(Eva$Stage)
+Eva$Seks = as.factor(Eva$Seks)
+Eva$Smoking = as.factor(Eva$Smoking)
+Eva$Stage2 = as.factor(Eva$Stage2)
+
+load("~/Documents/PHD/LUNGCANCER/SURVIVAL/WITHOUT NOISE/Functions.RData")
+
+advanced = Eva[Eva$Stage2=="advanced",]
+advancedmet = advanced[,15:113]
+
+early = Eva[Eva$Stage2=="early",]
+earlymet = early[,15:113]
+
+Prog = Eva[,c(11,116)]
+Prog$Seks     <- ifelse(Prog$Seks=='M',1,0)
+Prog$Stage2     <- ifelse(Prog$Stage2=='early',1,0)
+
+Progearly = data.frame(Seks = Prog[Prog$Stage2==1,1])
+Progadvance = data.frame(Seks= Prog[Prog$Stage2==0,1])
+``` 
+
+## INTRODUCTION
+### Goal of the study
+
+* 56 lung cancer patients (Stage I and II = 12, Stage III and IV = 44)
+* Survival data for cancer patients
+* Metabolic data for estimating survival time
+* Classify into high and low risk group
+* This dataset will be used for validation
+
+
+### Characteristics of the data
+
+* Survival data (survival time \& censoring)
+* Metabolic data  (99 integration region from NMR spectrum after removing noise variables)
+* Clinical covariates (BMI, Gender, Smoking, Age, Diabetes, Stage, Histology)
+
+\newpage
+## EXPLORATORY DATA ANALYIS
+### The numerical variables
+#### Age
+```{r D, echo=FALSE}
+# AGE  
+mean(Eva$Age); sd(Eva$Age)
+#mean_age
+#sd_age
+nf <- layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,3))
+par(mar=c(3.1, 3.1, 1.1, 2.1))
+boxplot(Eva$Age, horizontal=TRUE,  outline=TRUE,ylim=c(30,90), frame=F, col = "green1", main = "Boxplot and Histogram of Age")
+hist(Eva$Age,xlim=c(30,90), col = "pink", main = NULL)
+```
+\newpage
+
+#### BMI
+```{r E, echo=FALSE}
+# BMI  
+mean(Eva$BMI); sd(Eva$BMI)
+nf <- layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,3))
+par(mar=c(3.1, 3.1, 1.1, 2.1))
+boxplot(Eva$BMI, horizontal=TRUE,  outline=TRUE,ylim=c(15,44), frame=F, col = "green1", main = "Boxplot and Histogram of BMI")
+hist(Eva$BMI,xlim=c(15,44), col = "pink", main = NULL)
+
+```
+\newpage
+
+#### Glycemia
+
+```{r F, echo=FALSE}
+mean(Eva$glycemia); sd(Eva$glycemia)
+# GLYCEMIA 
+nf <- layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,3))
+par(mar=c(3.1, 3.1, 1.1, 2.1))
+boxplot(Eva$glycemia, horizontal=TRUE,  outline=TRUE,ylim=c(65,200), frame=F, col = "green1", main = "Boxplot and Histogram of Gycemia")
+hist(Eva$glycemia,xlim=c(65,200), col = "pink", main = NULL)
+```
+\newpage
+
+#### SUVMAX
+```{r G, echo=FALSE}
+mean(Eva$SUVMAX,na.rm=T); sd(Eva$SUVMAX,na.rm=T)
+# SUVMAX  
+nf <- layout(mat = matrix(c(1,2),2,1, byrow=TRUE),  height = c(1,3))
+par(mar=c(3.1, 3.1, 1.1, 2.1))
+boxplot(Eva$SUVMAX, horizontal=TRUE,  outline=TRUE,ylim=c(0,45), frame=F, col = "green1", main = "Boxplot and Histogram of SUVMAX")
+hist(Eva$SUVMAX,xlim=c(0,45), col = "pink", main = NULL)
+```
+
+### The categorical variables
+
+``` {r H, echo=FALSE, fig.height=3, fig.width=4}
+j =data.frame(table(Eva$Seks)); names(j) = c("Gender","Frequency")
+ggplot(data=j, aes(x=Gender, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+
+``` {r I, echo=FALSE, fig.height=3, fig.width=4}
+jj =data.frame(table(Eva$Smoking)); names(jj) = c("Smoking","Frequency")
+ggplot(data=jj, aes(x=Smoking, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+
+``` {r J, echo=FALSE, fig.height=3, fig.width=4}
+jjj =data.frame(table(Eva$Diabetes)); names(jjj) = c("Diabetes","Frequency")
+ggplot(data=jjj, aes(x=Diabetes, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+
+``` {r K, echo=FALSE, fig.height=3, fig.width=4}
+jk =data.frame(table(Eva$HISTOLOGY)); names(jk) = c("HISTOLOGY","Frequency")
+ggplot(data=jk, aes(x=HISTOLOGY, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+
+``` {r L, echo=FALSE, fig.height=3, fig.width=4}
+jkk =data.frame(table(Eva$Stage)); names(jkk) = c("Stage","Frequency")
+ggplot(data=jkk, aes(x=Stage, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+
+``` {r M, echo=FALSE, fig.height=3, fig.width=4}
+jkkk =data.frame(table(Eva$Stage2)); names(jkkk) = c("CombinedStage","Frequency")
+ggplot(data=jkkk, aes(x=CombinedStage, y=Frequency)) +
+  geom_bar(stat="identity", fill="pink")+
+  theme_minimal()
+```
+
+## KAPLAN MEIER PLOT
+### For all the patients
+``` {r N, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR OVERALL
+o = Surv(Eva$OS,Eva$Indicator2)
+oo = survfit(o ~ 1,conf.type = "log-log")
+# cutomizing the plots
+ggsurvplot(oo, 
+           data = Eva, 
+           size = 1,                 # change line size
+           palette = 
+             c("#2E9FDF"),# custom color palettes
+                     # Add p-value
+           #risk.table = TRUE,        # Add risk table
+           #risk.table.height = 0.2, # Useful to change when you have multiple groups    # Change ggplot2 theme
+)
+```
+
+### By gender
+``` {r O, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR GENDEAR
+g = Surv(Eva$OS,Eva$Indicator2)
+gg = survfit(g ~ Eva$Seks,conf.type = "log-log")
+# cutomizing the plots
+ggsurvplot(gg, 
+data = Eva, 
+size = 1,                 # change line size
+palette = 
+  c("#E7B800", "#2E9FDF"),# custom color palettes
+#conf.int = TRUE,          # Add confidence interval
+pval = TRUE,              # Add p-value
+legend.labs = 
+  c("Female", "Male")  # Change legend labels # Change ggplot2 theme
+)
+
+```
+
+### By smoking status
+``` {r P, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR SMOKING
+sm = Surv(Eva$OS,Eva$Indicator2)
+ssm = survfit(sm ~ Eva$Smoking,conf.type = "log-log")
+# cutomizing the plots
+ggsurvplot(ssm, 
+           data = Eva, 
+           size = 1,                 # change line size
+           palette = 
+             c("#E7B800", "#2E9FDF","#FF0000"),# custom color palettes
+           #conf.int = TRUE,          # Add confidence interval
+           pval = TRUE,              # Add p-value
+           legend.labs = 
+             c("Former", "No","Yes")
+)
+```
+
+### By diabetes status
+``` {r Q, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR DIABETES
+d = Surv(Eva$OS,Eva$Indicator2)
+dd = survfit(d ~ Eva$Diabetes,conf.type = "log-log")
+# cutomizing the plots
+ggsurvplot(dd, 
+           data = Eva, 
+           size = 1,                 # change line size
+           palette = 
+             c("#E7B800", "#2E9FDF"),# custom color palettes
+           #conf.int = TRUE,          # Add confidence interval
+           pval = TRUE,              # Add p-value
+           legend.labs =c( "No","Yes")
+)
+```
+
+### By hisology status
+``` {r R, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR HISTOLOGY
+h = Surv(Eva$OS,Eva$Indicator2)
+hh = survfit(h ~ Eva$HISTOLOGY,conf.type = "log-log")
+# cutomizing the plots
+ggsurvplot(hh, 
+           data = Eva, 
+           size = 1,                 # change line size
+           palette = 
+             c("#E7B800", "#2E9FDF"),# custom color palettes
+                # Add confidence interval
+           pval = TRUE,              # Add p-value
+           
+           legend.labs = 
+            levels(Eva$HISTOLOGY)
+)
+
+```
+
+### By Cancer stage
+``` {r S, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR CANCER STAGE
+s = Surv(Eva$OS,Eva$Indicator2)
+ss = survfit(s ~ Eva$Stage)
+# cutomizing the plots
+ggsurvplot(ss, 
+           data = Eva, 
+           size = 1,                 # change line size
+           #palette = 
+             #c("#E7B800", "#2E9FDF","cyan"),# custom color palettes
+           conf.int = FALSE,          # Add confidence interval
+           pval = TRUE,              # Add p-value
+             legend.labs = levels(Eva$Stage),    # Change legend labels
+           ggtheme = theme_bw()      # Change ggplot2 theme
+)
+
+```
+
+### By combined cancer stage
+``` {r T, echo=FALSE, fig.height=3, fig.width=4}
+#  FOR CANCER STAGE (2)
+ss2 = survfit(s ~ Eva$Stage2)
+# cutomizing the plots
+ggsurvplot(ss2, 
+           data = Eva, 
+           size = 1,                 # change line size
+           palette = 
+           c("#E7B800", "#2E9FDF","cyan"),# custom color palettes
+           #conf.int = TRUE,          # Add confidence interval
+           pval = TRUE,              # Add p-valu
+           legend.labs = 
+             c("advanced", "early")  
+)
+
+``` 
+
+
+## COXPH OF EACH OF THE CLINICAL COVARIATES (UNIVARIATE)
+``` {r U, echo=FALSE}
+summary(coxph(s ~ SUVMAX, data =  Eva))$coefficients 
+```
+
+``` {r V, echo=FALSE}
+summary(coxph(s ~ Age, data =  Eva))$coefficients 
+````
+
+``` {r W, echo=FALSE}
+summary(coxph(s ~ glycemia, data =  Eva))$coefficients 
+````
+
+``` {r X, echo=FALSE}
+summary(coxph(s ~ BMI, data =  Eva))$coefficients 
+````
+
+``` {r Y, echo=FALSE}
+summary(coxph(s ~ Seks, data =  Eva))$coefficients 
+````
+
+``` {r AB, echo=FALSE}
+summary(coxph(s ~ Smoking, data =  Eva))$coefficients 
+
+````
+
+``` {r AC, echo=FALSE}
+summary(coxph(s ~ Diabetes, data =  Eva))$coefficients 
+
+````
+
+``` {r AD, echo=FALSE}
+summary(coxph(s ~ HISTOLOGY, data =  Eva))$coefficients 
+
+````
+
+``` {r AE, echo=FALSE}
+summary(coxph(s ~ Stage2, data =  Eva))$coefficients
+````
+\newpage
+
+## COXPH OF ALL CLINICAL COVARIATES (MULTIVARIATE)
+Selecting those that are significant univraitely to further use in the multirivariate cox ph model. GENDER , STAGE and SUVMAX are significant.
+
+``` {r AF, echo=FALSE}
+summary(coxph(s ~ Seks + Stage2, data =  Eva))$coefficients
+summary(coxph(s ~ Seks + Stage2 + SUVMAX, data =  Eva))$coefficients
+````
+The three covariates were still significant univariately
+
+## COXPH OF EACH OF THE METABOLITES
+This are the significant metabolites, multiplicity adjustment using BH which is the last column. 19 was significant before adjustment and None of the metabolites was significant after adjustment
+``` {r AG, echo=FALSE}
+rawpvalue = sapply(Eva_metabolite,function(x)signif(as.matrix(coef(summary(coxph(s ~ x)))[,5]),digits = 3))
+coeff = sapply(Eva_metabolite,function(x)
+  signif(as.matrix(coef(summary(coxph(s ~ x)))[,1]),digits = 4)
+)
+HR = sapply(Eva_metabolite,function(x)
+  signif(as.matrix(coef(summary(coxph(s ~ x)))[,2]),digits = 5))
+pval = data.frame(rawpvalue, coeff, HR)
+pval = pval[order(pval$rawpvalue),]
+pval$Hochberg = signif(p.adjust(pval$rawpvalue, method = "BH"),3)
+pval$adjusted = -log(pval$Hochberg)
+pval[1:11,]
+````
+
+### GRAPHICALLY EXPRESSION OF THE ADJUSTED PVALUES
+```{r AH, echo=FALSE, fig.height=4, fig.width=7}
+pval$metnames = rownames(pval)
+ggplot(pval, aes(y =-log(Hochberg), x=coeff)) + geom_point(color = "blue")+ 
+geom_text(aes(label=metnames), size = 3)+
+  theme_minimal()
+
+```
+
+
+## COXPH OF EACH OF THE METABOLITES WITH THE SIGNIFICANT METABOLITES
+
+The Cox ph analysis of each metabolite with Gender , Stage. SUVMax not used because it is not of interest. 9 was significant before adjustment and None of the metabolites was significant after adjustment
+```{r AI, echo=FALSE}
+pan <- list()
+pan <- lapply(1:99,function(q,Eva){
+  paan <- signif(as.matrix(coef(summary(coxph(s ~ Eva[,q+14] + Seks+ Stage2, data = Eva)))[1,5]),digits = 3)
+},Eva)
+
+
+# COEFFICIENTS
+pcn <- list()
+pcn <- lapply(1:99,function(q,Eva){
+  pccn <- signif(as.matrix(coef(summary(coxph(s ~ Eva[,q+14]+ Seks + Stage2, data = Eva)))[1,1]),digits = 4)
+},Eva)
+
+# HAZARD RATIO
+phn <- list()
+phn <- lapply(1:99,function(q,Eva){
+  phhn <- signif(as.matrix(coef(summary(coxph(s ~ Eva[,q+14]+ Seks + Stage2, data = Eva)))[1,2]),digits = 5)
+},Eva)
+
+pvaln = data.frame(metnames = names(Eva)[15:113], coefficient = unlist(pcn),HR = unlist(phn),rawpvale = unlist(pan))
+
+pvaln = pvaln[order(pvaln$rawpvale),]
+pvaln$Hochberg = signif(p.adjust(pvaln$rawpvale, method = "BH"),3)
+pvaln$adjusted = -log(pvaln$Hochberg)
+pvaln[1:11,]
+```
+
+### GRAPHICALLY EXPRESSION OF THE ADJUSTED PVALUES
+``` {r AJ, echo=FALSE, fig.height=4, fig.width=7}
+ggplot(pvaln, aes(y =-log(Hochberg), x=coefficient)) + geom_point(color = "blue")+ 
+geom_text(aes(label=metnames), size = 3)+
+  theme_minimal()
+````
+
+## CLASSIFICATION OF SUBJECT BY STAGE
+```{r AK}
+nrow(early)
+
+nrow(advanced)
+
+length(Eva[15:113])
+
+```
+
+## COXPH OF EACH OF THE CLINICAL COVARIATES BY STAGE (UNIVARIATE)
+ Note : First row is the early stage and the second row is the advanced stage
+``` {r AL, echo=FALSE}
+e = Surv(early$OS,early$Indicator2)
+a = Surv(advanced$OS,advanced$Indicator2)
+```
+
+
+### SUVMAX 
+```{r AM, echo=FALSE}
+rbind(summary(coxph(e ~ SUVMAX, data =  early))$coefficients,summary(coxph(a ~ SUVMAX, data =  advanced))$coefficients)  
+```
+
+
+### AGE
+``` {r AN, echo=FALSE}
+rbind(summary(coxph(e ~ Age, data =  early))$coefficients,summary(coxph(a ~ Age, data =  advanced))$coefficients)
+````
+
+
+### GLYCEMIA
+``` {r AO, echo=FALSE}
+rbind(summary(coxph(e ~ glycemia, data =  early))$coefficients,summary(coxph(a ~ glycemia, data =  advanced))$coefficients) 
+````
+
+
+### BMI
+``` {r AP, echo=FALSE}
+rbind(summary(coxph(e ~ BMI, data =  early))$coefficients,summary(coxph(a ~ BMI, data =  advanced))$coefficients) 
+````
+
+
+
+### SEKS
+``` {r AQ, echo=FALSE}
+rbind(summary(coxph(e ~ Seks, data =  early))$coefficients,summary(coxph(a ~ Seks, data =  advanced))$coefficients) 
+````
+
+
+### SMOKING
+``` {r AR, echo=FALSE}
+rbind(summary(coxph(e ~ Smoking, data =  early))$coefficients,summary(coxph(a ~ Smoking, data = advanced))$coefficients) 
+
+````
+
+
+### DIABETES
+``` {r AS, echo=FALSE}
+rbind(summary(coxph(e ~ Diabetes, data =  early))$coefficients,summary(coxph(a ~ Diabetes, data =  advanced))$coefficients) 
+
+````
+
+
+### HISTOLOGY
+``` {r AT, echo=FALSE}
+rbind(summary(coxph(e ~ HISTOLOGY, data =  early))$coefficients,summary(coxph(a ~ HISTOLOGY, data =  advanced))$coefficients) 
+
+````
+
+## COXPH OF  ALL CLINICAL COVARIATES  FOR EARLY STAGE (MULTIPLE)
+Selecting those that are significant univraitely to further use in the multirivariate cox ph model. AGE and GENDER are significant.
+
+``` {r AU, echo=FALSE}
+summary(coxph(e ~ Seks , data =  early))$coefficients
+````
+
+## COXPH OF EACH OF ALL CLINICAL COVARIATES  FOR ADVANCED STAGE (MULTIPLE)
+Selecting those that are significant univraitely to further use in the multirivariate cox ph model. GENDER is significant.
+
+``` {r AV, echo=FALSE}
+summary(coxph(a ~ Seks , data =  advanced))$coefficients
+````
+
+In both cases, Seks was significant.
+
+## COXPH ON EACH OF THE METABOLITES IN THE EARLY STAGE
+This are the significant metabolites, multiplicity adjustment using BH which is the last column. None of the metabolites were significant after adjustment.
+``` {r AW, echo=FALSE}
+erawpvalue = sapply(earlymet,function(x)signif(as.matrix(coef(summary(coxph(e ~ x)))[,5]),digits = 3))
+ecoeff = sapply(earlymet,function(x)
+  signif(as.matrix(coef(summary(coxph(e ~ x)))[,1]),digits = 4)
+)
+eHR = sapply(earlymet,function(x)
+  signif(as.matrix(coef(summary(coxph(e ~ x)))[,2]),digits = 5))
+epval = data.frame(erawpvalue, ecoeff, eHR)
+epval = epval[order(epval$erawpvalue),]
+epval$eHochberg = signif(p.adjust(epval$erawpvalue, method = "BH"),3)
+epval$eadjusted = -log(epval$eHochberg)
+epval[1:8,]
+```
+
+## COXPH ON EACH OF THE METABOLITES IN THE ADVANCED STAGE
+This are the significant metabolites, multiplicity adjustment using BH which is the last column. None of the metabolites were significant after adjustment.
+``` {r AX, echo=FALSE}
+arawpvalue = sapply(advancedmet,function(x)signif(as.matrix(coef(summary(coxph(a ~ x)))[,5]),digits = 3))
+acoeff = sapply(advancedmet,function(x)
+  signif(as.matrix(coef(summary(coxph(a ~ x)))[,1]),digits = 4)
+)
+aHR = sapply(advancedmet,function(x)
+  signif(as.matrix(coef(summary(coxph(a ~ x)))[,2]),digits = 5))
+apval = data.frame(arawpvalue, acoeff, aHR)
+apval = apval[order(apval$arawpvalue),]
+apval$aHochberg = signif(p.adjust(apval$arawpvalue, method = "BH"),3)
+apval$aadjusted = -log(apval$aHochberg)
+apval[1:17,]
+```
+
+## COXPH OF EACH OF THE METABOLITES WITH THE SIGNIFICANT METABOLITES IN THE EARLY STAGE
+The Cox ph analysis of each metabolite with Gender. None of the metabolites was significant
+```{r AY, echo=FALSE}
+pan_early <- list()
+pan_early <- lapply(1:99,function(q,early){
+  paan_early <- signif(as.matrix(coef(summary(coxph(e ~ early[,q+14] + Seks, data = early)))[1,5]),digits = 3)
+},early)
+
+
+# COEFFICIENTS
+pcn_early <- list()
+pcn_early <- lapply(1:99,function(q,early){
+  pccn_early <- signif(as.matrix(coef(summary(coxph(e ~ early[,q+14] + Seks, data = early)))[1,1]),digits = 4)
+},early)
+
+# HAZARD RATIO
+phn_early <- list()
+phn_early <- lapply(1:99,function(q,early){
+  phhn_early <- signif(as.matrix(coef(summary(coxph(e ~ early[,q+14] + Seks, data = early)))[1,2]),digits = 5)
+},early)
+
+pvaln_early = data.frame(metnames = names(early)[15:113], coefficient = unlist(pcn_early),HR = unlist(phn_early),rawpvale = unlist(pan_early))
+
+pvaln_early = pvaln_early[order(pvaln_early$rawpvale),]
+pvaln_early$Hochberg = signif(p.adjust(pvaln_early$rawpvale, method = "BH"),3)
+pvaln_early$adjusted = -log(pvaln_early$Hochberg)
+pvaln_early[1:7,]
+```
+
+### GRAPHICALLY EXPRESSION OF THE ADJUSTED PVALUES IN EARLY STAGE
+``` {r AZ, echo=FALSE, fig.height=4, fig.width=7}
+ggplot(pvaln_early, aes(y =-log(Hochberg), x=coefficient)) + geom_point(color = "blue")+ 
+  geom_text(aes(label=metnames), size = 3)+
+  theme_minimal()
+````
+
+## COXPH OF EACH OF THE METABOLITES WITH THE SIGNIFICANT METABOLITES IN THE ADVANCED STAGE
+The Cox ph analysis of each metabolite with Gender. None of the metabolites was significant
+```{r BC, echo=FALSE}
+pan_advanced <- list()
+pan_advanced <- lapply(1:99,function(q,advanced){
+  paan_advanced <- signif(as.matrix(coef(summary(coxph(a ~ advanced[,q+14] + Seks, data = advanced)))[1,5]),digits = 3)
+},advanced)
+
+
+# COEFFICIENTS
+pcn_advanced <- list()
+pcn_advanced <- lapply(1:99,function(q,advanced){
+  pccn_advanced <- signif(as.matrix(coef(summary(coxph(a ~ advanced[,q+14] + Seks, data = advanced)))[1,1]),digits = 4)
+},advanced)
+
+# HAZARD RATIO
+phn_advanced <- list()
+phn_advanced <- lapply(1:99,function(q,advanced){
+  phhn_advanced <- signif(as.matrix(coef(summary(coxph(a ~ advanced[,q+14] +Seks, data = advanced)))[1,2]),digits = 5)
+},advanced)
+
+pvaln_advanced = data.frame(metnames = names(advanced)[15:113], coefficient = unlist(pcn_advanced),HR = unlist(phn_advanced),rawpvale = unlist(pan_advanced))
+
+pvaln_advanced = pvaln_advanced[order(pvaln_advanced$rawpvale),]
+pvaln_advanced$Hochberg = signif(p.adjust(pvaln_advanced$rawpvale, method = "BH"),3)
+pvaln_advanced$adjusted = -log(pvaln_advanced$Hochberg)
+pvaln_advanced[1:6,]
+```
+
+### GRAPHICALLY EXPRESSION OF THE ADJUSTED PVALUES IN ADVANCED STAGE
+``` {r BD, echo=FALSE, fig.height=4, fig.width=7}
+ggplot(pvaln_advanced, aes(y =-log(Hochberg), x=coefficient)) + geom_point(color = "blue")+ 
+  geom_text(aes(label=metnames), size = 3)+
+  theme_minimal()
+````
+
+\newpage
+## MODELLING FRAMEWORK
+* Model clinical and metabolic variables $$h(t) = h_o(t)\exp^u$$ $$\mu = \sum^{M}_{m-1}\alpha_mC_m + \sum^{N}_{n-1}\beta_nX_n$$
+
+* Obtain a risk score based on the coefficient and data of the metabolites
+$$ R_i = \sum^{N}_{n-1}\hat{\beta_n}x_n$$
+* Obtain the risk group (G) using the median as cutoff
+$$\text{Low risk} =R_i < median(R_i) $$
+$$\text{high risk} =R_i > median(R_i) $$
+* Model the clinical covariates and the risk group to obtain the hazard ratio and survival in the risk group
+$$h(t) = h_o(t)\exp^u $$
+$$\mu = \sum^{M}_{m-1}\alpha_mC_m + \gamma G$$
+
+### CROSS VALIDATION WORKFLOW
+* Divide the data into training and test set based on the specified fold
+* Use the training set to fit the model (clinical covariates and all the metabolites) and select the nonzero metabolites
+* Use the nonzero metabolites to obtain the risk score based in the training set as well as the test set using its coefficient and the respective set 
+* Model the clinical covariates and the risk group to obtain the hazard ratio and survival of the risk group in the training and test set
+
+
+```{r BE,echo=FALSE}
+knitr::include_graphics("~/Documents/PHD/LUNGCANCER/SURVIVAL/WITHOUT NOISE/yes.PNG")
+```
+
+## SHRINKAGE METHOD (LASSO)
+The lasso is cross validated in 1000 loops with Gender and stage. The HR of the risk group is reported.
+
+###  LASSO CROSS VALIDATION FOR ALL THE PATIENTS
+#### coefficient
+```{r BF, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+set.seed(1234)
+allsubject = Lasso.Cox.PH.CVV(Survival = Eva$OS,
+                      Censor = Eva$Indicator2,
+                      Data = Eva_metabolite,
+                      Prognostic = Prog,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+
+```
+#### All subjects survival result
+```{r BG, echo=FALSE}
+allsubject$Summary.coef
+allsubject$Summary.HR
+```
+
+#### GRAPHICAL OUTPUT
+Model with gender and stage Boxplot of the coefficient of test, training set.
+```{r BH,echo=FALSE, out.width='.49\\linewidth', fig.width=3,fig.height=3,fig.show='hold',fig.align='center'}
+
+allsubject$CoefficientBP
+allsubject$HazardRatioBP
+```
+
+
+###  LASSO CROSS VALIDATION FOR EARLY STAGE
+#### coefficient
+```{r BI, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+set.seed(1234)
+earlysubject = Lasso.Cox.PH.CVV(Survival = early$OS,
+                      Censor = early$Indicator2,
+                      Data = earlymet,
+                      Prognostic = Progearly,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+#### hazard ratio
+```{r BJ, echo=FALSE}
+earlysubject$Summary.coef
+earlysubject$Summary.HR
+```
+#### GRAPHICAL OUTPUT FOR THE EARLY STAGE
+Model with gender, Boxplot of the coefficient of test, training set.
+
+```{r BK,echo=FALSE, out.width='.49\\linewidth', fig.width=3,fig.height=3,fig.show='hold',fig.align='center'}
+
+earlysubject$CoefficientBP
+earlysubject$HazardRatioBP
+
+```
+
+
+###  LASSO CROSS VALIDATION FOR ADVANCED STAGE
+#### coefficient
+```{r BL, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+set.seed(1234)
+advancedsubject = Lasso.Cox.PH.CVV(Survival = advanced$OS,
+                      Censor = advanced$Indicator2,
+                      Data = advancedmet,
+                      Prognostic = Progadvance,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+#### hazard ratio
+```{r BM, echo=FALSE}
+advancedsubject$Summary.coef
+advancedsubject$Summary.HR
+```
+
+
+#### GRAPHICAL OUTPUT FOR THE ADVANCED STAGE WITH THE OUTLYING VALUE
+Model with gender, Boxplot of the coefficient of test, training set.
+```{r BOO,echo=FALSE, out.width='.49\\linewidth', fig.width=2.5,fig.height=2,fig.show='hold',fig.align='center'}
+
+advancedsubject$CoefficientBP
+advancedsubject$HazardRatioBP
+```
+
+
+#### GRAPHICAL OUTPUT FOR THE ADVANCED STAGE WITHOUT THE OUTLYING VALUE
+Model with gender, Boxplot of the coefficient of test, training set. That is withot 1299
+
+```{r BN,echo=FALSE, out.width='.49\\linewidth', fig.width=2.5,fig.height=2,fig.show='hold',fig.align='center'}
+which(advancedsubject$HR.Full$HR>20)
+
+HBP = ggplot(advancedsubject$HR.Full[-1299,],aes(y = HR,x = Set)) +
+      geom_boxplot(aes(fill = Set)) +
+      ylab(expression("Hazard Ratio")) +
+      xlab(expression()) + 
+      theme_bw()+ 
+      geom_hline(yintercept=1,colour='darkgreen', linetype='dashed',size=1,5)+
+      theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+      theme(legend.position = 'none')
+
+CBP = ggplot(advancedsubject$HR.Full[-1299,],aes(y = log(HR),x = Set)) +
+      geom_boxplot(aes(fill = Set)) +
+      ylab(expression("Hazard Ratio")) +
+      xlab(expression()) + 
+      theme_bw()+ 
+      geom_hline(yintercept=1,colour='darkgreen', linetype='dashed',size=1,5)+
+      theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+      theme(legend.position = 'none')
+HBP
+CBP
+```
+
+
+
+### TOP 15 metabolites using all subjects
+```{r BO, echo=FALSE}
+h = data.frame(allsubject$Selected.Gene.Matrix)
+Selectedvariables = data.frame(Number = apply(h,1,sum), met = names(Eva_metabolite))
+Selectedvariables2 = data.frame(Selectedvariables[order(Selectedvariables$Number,decreasing = T),])
+
+Selectedvariables2$V4 = as.numeric(gsub("var","",Selectedvariables2$met))
+Selectedvariables2$V5 = gsub("var","IR",Selectedvariables2$met)
+Selectedvariables2$V5[1:15]
+```
+
+### THE FREQUENCY  OF SELECTION IN THE 1000 CV FOR ALL SUBJECT
+```{r BP,echo=FALSE, out.width='.49\\linewidth', fig.width=5,fig.height=3,fig.show='hold',fig.align='center'}
+
+## BARPLOT FOR THE NUMBER OF TIMES EACH METABOLITES WAS SELECTED
+ggplot(Selectedvariables2, aes(V4,Number)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+## TAKING TOP 15
+ggplot(Selectedvariables2[1:15,], aes(reorder(V5, -Number),Number,fill=V5)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(legend.position="none")
+
+```
+
+### TOP 15 metabolites using early subjects
+```{r BQ, echo=FALSE}
+hh = data.frame(earlysubject$Selected.Gene.Matrix)
+Selectedvariables1 = data.frame(Number = apply(hh,1,sum), met = names(Eva_metabolite))
+Selectedvariables3 = data.frame(Selectedvariables1[order(Selectedvariables1$Number,decreasing = T),])
+
+Selectedvariables3$V4 = as.numeric(gsub("var","",Selectedvariables3$met))
+Selectedvariables3$V5 = gsub("var","IR",Selectedvariables3$met)
+Selectedvariables3$V5[1:15]
+```
+
+### THE FREQUENCY  OF SELECTION IN THE 1000 CV FOR EARLY SUBJECT
+```{r BR,echo=FALSE, out.width='.49\\linewidth', fig.width=5,fig.height=3,fig.show='hold',fig.align='center'}
+
+## BARPLOT FOR THE NUMBER OF TIMES EACH METABOLITES WAS SELECTED
+ggplot(Selectedvariables3, aes(V4,Number)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+## TAKING TOP 15
+ggplot(Selectedvariables3[1:15,], aes(reorder(V5, -Number),Number,fill=V5)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(legend.position="none")
+
+```
+
+### TOP 15 metabolites using advanced subjects
+```{r BS, echo=FALSE}
+hhh = data.frame(advancedsubject$Selected.Gene.Matrix)
+Selectedvariables4 = data.frame(Number = apply(hhh,1,sum), met = names(Eva_metabolite))
+Selectedvariables5 = data.frame(Selectedvariables4[order(Selectedvariables4$Number,decreasing = T),])
+
+Selectedvariables5$V4 = as.numeric(gsub("var","",Selectedvariables5$met))
+Selectedvariables5$V5 = gsub("var","IR",Selectedvariables5$met)
+Selectedvariables5$V5[1:15]
+```
+
+### THE FREQUENCY  OF SELECTION IN THE 1000 CV FOR ADVANCED SUBJECT
+```{r BT,echo=FALSE, out.width='.49\\linewidth', fig.width=5,fig.height=3,fig.show='hold',fig.align='center'}
+
+ggplot(Selectedvariables5, aes(V4,Number)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())
+## TAKING TOP 15
+ggplot(Selectedvariables5[1:15,], aes(reorder(V5, -Number),Number,fill=V5)) +   
+  geom_bar(position = "dodge", stat="identity") + ylab("Frequency of selection") + xlab("Integration region") + theme_bw() + theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+ theme(legend.position="none")
+
+```
+
+### COXPH USING TOP 5 MOST SELECTED METABOLITES USING ALL THE SUBJECTS(FIXED ANALYSIS) 
+```{r BU, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+
+all = data.frame(Seks = Eva$Seks,Stage = Eva$Stage2,select(Eva_metabolite,as.character(Selectedvariables2$met[1:5])))
+
+Coefficients.Non.Zero=coxph(s ~ ., data =  all)$coefficients[3:7]
+Selected.Genes = names(coxph(s ~ ., data =  all)$coefficients[3:7])
+######################
+Risk.Scores <- as.vector(Coefficients.Non.Zero[Selected.Genes] %*% t(Eva[,Selected.Genes]))
+riskgroup = as.factor(ifelse(Risk.Scores>median(Risk.Scores),"High risk","Low risk" ))
+pcacoxdata = data.frame(Survival= Eva$OS,Censor = Eva$Indicator2,
+                        Seks = Eva$Seks,Stage = Eva$Stage2,riskgroup = riskgroup)
+
+summary(coxph(s ~ ., data =  all))$coefficients
+summary(coxph(Surv(Survival,Censor) ~ .,data= pcacoxdata))$coefficients
+
+
+Data.KM<- data.frame(Survival=Eva$OS,Censor=Eva$Indicator2
+                     ,Seks=Eva$Seks,
+                     Stage=Eva$Stage2,Risk.Group=riskgroup)
+
+KM  <- survfit(Surv(Survival,Censor)~ Risk.Group,data=Data.KM)
+testt <- summary(KM)
+ggsurvplot(fit=KM,surv.scale ='percent',risk.table=FALSE,ggtheme = theme_classic(),
+           palette='Dark2',conf.int=TRUE,pval=TRUE,pval.coord = c(10,0.05),
+           legend='right',legend.title='Risk',legend.labs=c('High risk','Low risk'),
+           data=Data.KM)
+
+################
+Data.Boxplot <- data.frame(Survival=Eva$OS,Risk.Group=riskgroup)
+Data.Boxplot$Risk.Group <- factor(Data.Boxplot$Risk.Group, levels=c('Low risk','High risk'))
+
+ggplot(Data.Boxplot,aes(y = Survival,x = Risk.Group)) +
+  geom_boxplot(aes(fill = Risk.Group),width=0.4) +
+  ylab(expression('Survival time ')) +
+  xlab(expression()) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'none')
+
+###########################
+# Plotting the number of high risk persons per gender and per cancer stage - Preparation
+
+Prognostic.Risk <- data.frame(Prog,Risk=riskgroup,Stage = Eva$Stage2, Seks=Eva$Seks)
+
+#############
+
+# Plotting only per stage
+
+Table <- ftable(Prognostic.Risk$Stage,Prognostic.Risk$Risk)
+Table <- as.data.frame(Table)
+colnames(Table) <- c('Stage','Risk','Number')
+Table$Risk = c("High risk", "High risk","Low risk","Low risk")
+Table$Risk <- factor(Table$Risk, levels=c('Low risk','High risk'))
+
+ggplot(Table,aes(y = Number,x = Stage,fill=Risk,width=0.6)) +
+  geom_bar(stat='identity',position='dodge') +
+  ylab(expression('High risk frequency')) +
+  xlab(expression('')) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'right')
+
+
+
+# Plotting only per gender
+
+Table <- ftable(Prognostic.Risk$Seks,Prognostic.Risk$Risk)
+Table <- as.data.frame(Table)
+colnames(Table) <- c('Gender','Risk','Number')
+Table$Risk = c("High risk", "High risk","Low risk","Low risk")
+Table$Risk <- factor(Table$Risk, levels=c('Low risk','High risk'))
+Table$Gender = c("Female","Male","Female","Male")
+
+
+ggplot(Table,aes(y = Number,x = Gender,fill=Risk,width=0.6)) +
+  geom_bar(stat='identity',position='dodge') +
+  ylab(expression('High risk frequency')) +
+  xlab(expression('')) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'right')
+```
+
+### COXPH USING TOP 5 MOST SELECTED METABOLITES USING EARLY STAGE SUBJECTS (FIXED ANALYSIS)
+```{r BV, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+
+ee = data.frame(Seks = early$Seks,select(earlymet,as.character(Selectedvariables3$met[1:5])))
+
+
+Coefficients.Non.Zero=coxph(e ~ ., data =  ee)$coefficients[2:6]
+
+Selected.Genes = names(coxph(e ~ ., data =  ee)$coefficients[2:6])
+######################
+Risk.Scores <- as.vector(Coefficients.Non.Zero[Selected.Genes] %*% t(early[,Selected.Genes]))
+riskgroup = as.factor(ifelse(Risk.Scores>median(Risk.Scores),"High risk","Low risk" ))
+pcacoxdata = data.frame(Survival= early$OS,Censor = early$Indicator2,
+                        Seks = early$Seks,riskgroup = riskgroup)
+summary(coxph(e ~ ., data =  ee))$coefficients
+summary(coxph(Surv(Survival,Censor) ~ .,data= pcacoxdata))$coefficients
+####################
+
+Data.KM<- data.frame(Survival=early$OS,Censor=early$Indicator2
+                     ,Seks=early$Seks,
+                     Stage=early$Stage2,Risk.Group=riskgroup)
+
+KM  <- survfit(Surv(Survival,Censor)~ Risk.Group,data=Data.KM)
+testt <- summary(KM)
+ggsurvplot(fit=KM,surv.scale ='percent',risk.table=FALSE,ggtheme = theme_classic(),
+           palette='Dark2',conf.int=TRUE,pval=TRUE,pval.coord = c(10,0.05),
+           legend='right',legend.title='Risk',legend.labs=c('High risk','Low risk'),
+           data=Data.KM)
+
+################
+Data.Boxplot <- data.frame(Survival=early$OS,Risk.Group=riskgroup)
+Data.Boxplot$Risk.Group <- factor(Data.Boxplot$Risk.Group, levels=c('Low risk','High risk'))
+
+ggplot(Data.Boxplot,aes(y = Survival,x = Risk.Group)) +
+  geom_boxplot(aes(fill = Risk.Group),width=0.4) +
+  ylab(expression('Survival time ')) +
+  xlab(expression()) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'none')
+
+###########################
+# Plotting the number of high risk persons per gender  - Preparation
+
+Prognostic.Risk <- data.frame(Progearly,Risk=riskgroup,Stage = early$Stage2, Seks=early$Seks)
+
+
+# Plotting only per gender
+
+Table <- ftable(Prognostic.Risk$Seks,Prognostic.Risk$Risk)
+Table <- as.data.frame(Table)
+colnames(Table) <- c('Gender','Risk','Number')
+Table$Risk = c("High risk", "High risk","Low risk","Low risk")
+Table$Risk <- factor(Table$Risk, levels=c('Low risk','High risk'))
+Table$Gender = c("Female","Male","Female","Male")
+
+
+ggplot(Table,aes(y = Number,x = Gender,fill=Risk,width=0.6)) +
+  geom_bar(stat='identity',position='dodge') +
+  ylab(expression('High risk frequency')) +
+  xlab(expression('')) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'right')
+```
+
+### COXPH USING TOP 5 MOST SELECTED METABOLITES USING ADVANCED STAGE SUBJECTS (FIXED ANALYSIS)
+```{r BW, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+
+aa = data.frame(Seks = advanced$Seks,select(advancedmet,as.character(Selectedvariables5$met[1:5])))
+
+Coefficients.Non.Zero=coxph(a ~ ., data =  aa)$coefficients[2:6]
+
+Selected.Genes = names(coxph(a ~ ., data =  aa)$coefficients[2:6])
+######################
+Risk.Scores <- as.vector(Coefficients.Non.Zero[Selected.Genes] %*% t(advanced[,Selected.Genes]))
+riskgroup = as.factor(ifelse(Risk.Scores>median(Risk.Scores),"High risk","Low risk" ))
+pcacoxdata = data.frame(Survival= advanced$OS,Censor = advanced$Indicator2,
+                        Seks = advanced$Seks,riskgroup = riskgroup)
+summary(coxph(a ~ ., data =  aa))$coefficients
+summary(coxph(Surv(Survival,Censor) ~ .,data= pcacoxdata))$coefficients
+####################
+
+Data.KM<- data.frame(Survival=advanced$OS,Censor=advanced$Indicator2
+                     ,Seks=advanced$Seks,
+                     Stage=advanced$Stage2,Risk.Group=riskgroup)
+
+KM  <- survfit(Surv(Survival,Censor)~ Risk.Group,data=Data.KM)
+testt <- summary(KM)
+ggsurvplot(fit=KM,surv.scale ='percent',risk.table=FALSE,ggtheme = theme_classic(),
+           palette='Dark2',conf.int=TRUE,pval=TRUE,pval.coord = c(10,0.05),
+           legend='right',legend.title='Risk',legend.labs=c('High risk','Low risk'),
+           data=Data.KM)
+
+################
+Data.Boxplot <- data.frame(Survival=advanced$OS,Risk.Group=riskgroup)
+Data.Boxplot$Risk.Group <- factor(Data.Boxplot$Risk.Group, levels=c('Low risk','High risk'))
+
+ggplot(Data.Boxplot,aes(y = Survival,x = Risk.Group)) +
+  geom_boxplot(aes(fill = Risk.Group),width=0.4) +
+  ylab(expression('Survival time ')) +
+  xlab(expression()) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'none')
+
+###########################
+# Plotting the number of high risk persons per gender and per cancer stage - Preparation
+
+Prognostic.Risk <- data.frame(Progadvance,Risk=riskgroup,Stage = advanced$Stage2, Seks=advanced$Seks)
+
+
+# Plotting only per gender
+
+Table <- ftable(Prognostic.Risk$Seks,Prognostic.Risk$Risk)
+Table <- as.data.frame(Table)
+colnames(Table) <- c('Gender','Risk','Number')
+Table$Risk = c("High risk", "High risk","Low risk","Low risk")
+Table$Risk <- factor(Table$Risk, levels=c('Low risk','High risk'))
+Table$Gender = c("Female","Male","Female","Male")
+
+
+ggplot(Table,aes(y = Number,x = Gender,fill=Risk,width=0.6)) +
+  geom_bar(stat='identity',position='dodge') +
+  ylab(expression('High risk frequency')) +
+  xlab(expression('')) + 
+  theme_bw()+ 
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(legend.position = 'right')
+```
+
+
+
+## TOP 10 CROSS VALIDATION FOR THE EARLY STAGE  
+  
+```{r CE, echo=FALSE, message=FALSE}
+set.seed(1234)
+E10 = Lasso.Cox.PH.CVV(Survival = early$OS,
+                      Censor = early$Indicator2,
+                      Data = select(earlymet,as.character(Selectedvariables3$met[1:10])),
+                      Prognostic = Progearly,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+
+### GRAPHICAL OUTPUT
+```{r CF, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+E10$CoefficientBP
+E10$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r CG, echo=FALSE}
+E10$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r CH, echo=FALSE}
+E10$Summary.HR
+```
+
+
+## TOP 15 CROSS VALIDATION FOR THE EARLY STAGE  
+  
+```{r CI, echo=FALSE, message=FALSE}
+set.seed(1234)
+E15 = Lasso.Cox.PH.CVV(Survival = early$OS,
+                       Censor = early$Indicator2,
+                       Data = select(earlymet,as.character(Selectedvariables3$met[1:15])),
+                       Prognostic = Progearly,
+                       n.CV = 1000,
+                       Fold = 3,
+                       Quantile = 0.50,
+                       GeneList = NULL,
+                       Standardize = TRUE,
+                       Plots = TRUE,
+                       Alpha = 1)
+```
+
+### GRAPHICAL OUTPUT
+```{r CJ, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+E15$CoefficientBP
+E15$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r CK, echo=FALSE}
+E15$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r CL, echo=FALSE}
+E15$Summary.HR
+```
+
+## TOP 10 CROSS VALIDATION FOR THE ADVANCED STAGE  
+  
+```{r CM, echo=FALSE, message=FALSE}
+set.seed(1234)
+A10 = Lasso.Cox.PH.CVV(Survival = advanced$OS,
+                      Censor = advanced$Indicator2,
+                      Data = select(advancedmet,as.character(Selectedvariables5$met[1:10])),
+                      Prognostic = Progadvance,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+
+### GRAPHICAL OUTPUT
+```{r CN, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+A10$CoefficientBP
+A10$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r CO, echo=FALSE}
+A10$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r CP, echo=FALSE}
+A10$Summary.HR
+```
+
+
+## TOP 15 CROSS VALIDATION FOR THE ADVANCED STAGE  
+  
+```{r CQ, echo=FALSE, message=FALSE}
+set.seed(1234)
+A15 = Lasso.Cox.PH.CVV(Survival = advanced$OS,
+                       Censor = advanced$Indicator2,
+                       Data = select(advancedmet,as.character(Selectedvariables5$met[1:15])),
+                       Prognostic = Progadvance,
+                       n.CV = 1000,
+                       Fold = 3,
+                       Quantile = 0.50,
+                       GeneList = NULL,
+                       Standardize = TRUE,
+                       Plots = TRUE,
+                       Alpha = 1)
+```
+
+### GRAPHICAL OUTPUT
+```{r CR, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+A15$CoefficientBP
+A15$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r CS, echo=FALSE}
+A15$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r CT, echo=FALSE}
+A15$Summary.HR
+```
+
+## FIXED 5 METABOLITES WITH NO SELECTION FOR ALL THE PATIENTS (CROSS VALIDATION)
+```{r, CU,echo=FALSE, message=FALSE}
+set.seed(1234)
+AF5 = nolassoCV(Survival = Eva$OS,
+                      Censor = Eva$Indicator2,
+                      Data = select(Eva_metabolite,as.character(Selectedvariables2$met[1:5])),
+                      Prognostic = Prog,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r CV, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+AF5$CoefficientBP
+AF5$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r CW, echo=FALSE}
+AF5$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r CX, echo=FALSE}
+AF5$Summary.HR
+```
+
+## FIXED 10 METABOLITES WITH NO SELECTION FOR ALL THE PATIENTS (CROSS VALIDATION)
+```{r, CY,echo=FALSE, message=FALSE}
+set.seed(1234)
+AF10 = nolassoCV(Survival = Eva$OS,
+                      Censor = Eva$Indicator2,
+                      Data = select(Eva_metabolite,as.character(Selectedvariables2$met[1:10])) ,
+                      Prognostic = Prog,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r CZ, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+AF10$CoefficientBP
+AF10$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DE, echo=FALSE}
+AF10$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DF, echo=FALSE}
+AF10$Summary.HR
+```
+
+
+## FIXED 15 METABOLITES WITH NO SELECTION FOR ALL THE PATIENTS (CROSS VALIDATION)
+```{r, DG,echo=FALSE, message=FALSE}
+set.seed(1234)
+AF15 = nolassoCV(Survival = Eva$OS,
+                      Censor = Eva$Indicator2,
+                      Data = select(Eva_metabolite,as.character(Selectedvariables2$met[1:15])),
+                      Prognostic = Prog,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r DH, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+AF15$CoefficientBP
+AF15$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DI, echo=FALSE}
+AF15$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DJ, echo=FALSE}
+AF15$Summary.HR
+```
+
+
+## FIXED 5 METABOLITES WITH NO SELECTION FOR THE EARLY PATIENTS  (CROSS VALIDATION)
+```{r, DK,echo=FALSE, message=FALSE}
+set.seed(1234)
+EF5 = nolassoCV(Survival = early$OS,
+                      Censor = early$Indicator2,
+                      Data = select(earlymet,as.character(Selectedvariables3$met[1:5])),
+                      Prognostic = Progearly,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r DL, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+EF5$CoefficientBP
+EF5$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DM, echo=FALSE}
+EF5$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DN, echo=FALSE}
+EF5$Summary.HR
+```
+
+## FIXED 10 METABOLITES WITH NO SELECTION FOR THE EARLY PATIENTS (CROSS VALIDATION) 
+```{r, NO,echo=FALSE, message=FALSE}
+set.seed(1234)
+EF10 = nolassoCV(Survival = early$OS,
+                      Censor = early$Indicator2,
+                      Data = select(earlymet,as.character(Selectedvariables3$met[1:10])),
+                      Prognostic = Progearly,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r DP, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+EF10$CoefficientBP
+EF10$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DQ, echo=FALSE}
+EF10$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DR, echo=FALSE}
+EF10$Summary.HR
+```
+
+
+## FIXED 15 METABOLITES WITH NO SELECTION FOR THE EARLY PATIENTS (CROSS VALIDATION)
+```{r, DS,echo=FALSE, message=FALSE}
+set.seed(1234)
+EF15 = nolassoCV(Survival = early$OS,
+                      Censor = early$Indicator2,
+                      Data = select(earlymet,as.character(Selectedvariables3$met[1:15])),
+                      Prognostic = Progearly,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r DT, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+EF15$CoefficientBP
+EF15$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DU, echo=FALSE}
+EF15$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DV, echo=FALSE}
+EF15$Summary.HR
+```
+
+
+
+## FIXED 5 METABOLITES WITH NO SELECTION FOR THE ADVANCED PATIENTS (CROSS VALIDATION)
+```{r, DW,echo=FALSE, message=FALSE}
+set.seed(1234)
+ADF5 = nolassoCV(Survival = advanced$OS,
+                      Censor = advanced$Indicator2,
+                      Data = select(advancedmet,as.character(Selectedvariables5$met[1:5])),
+                      Prognostic = Progadvance,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r DX, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+ADF5$CoefficientBP
+ADF5$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r DY, echo=FALSE}
+ADF5$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r DZ, echo=FALSE}
+ADF5$Summary.HR
+```
+
+
+## FIXED 10 METABOLITES WITH NO SELECTION FOR THE ADVANCED PATIENTS (CROSS VALIDATION)
+```{r, EF,echo=FALSE, message=FALSE}
+set.seed(1234)
+ADF10 = nolassoCV(Survival = advanced$OS,
+                      Censor = advanced$Indicator2,
+                      Data = select(advancedmet,as.character(Selectedvariables5$met[1:10])),
+                      Prognostic = Progadvance,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r EG, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+ADF10$CoefficientBP
+ADF10$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r EH, echo=FALSE}
+ADF10$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r EI, echo=FALSE}
+ADF10$Summary.HR
+```
+
+
+## FIXED 15 METABOLITES WITH NO SELECTION FOR THE ADVANCED PATIENTS (CROSS VALIDATION)
+```{r, EJ, echo=FALSE, message=FALSE}
+set.seed(1234)
+ADF15 = nolassoCV(Survival = advanced$OS,
+                      Censor = advanced$Indicator2,
+                      Data = select(advancedmet,as.character(Selectedvariables5$met[1:15])),
+                      Prognostic = Progadvance,
+                      n.CV = 1000,
+                      Fold = 3,
+                      Quantile = 0.50,
+                      GeneList = NULL,
+                      Standardize = TRUE,
+                      Plots = TRUE,
+                      Alpha = 1)
+```
+### GRAPHICAL OUTPUT
+```{r EK, echo=FALSE, out.width='.49\\linewidth', fig.width=4,fig.height=3,fig.show='hold',fig.align='center'}
+ADF15$CoefficientBP
+ADF15$HazardRatioBP
+```
+
+### SUMMARY RESULT FOR THE COEFFICIENT
+```{r EL, echo=FALSE}
+ADF15$Summary.coef
+```
+
+### SUMMARY RESULT FOR THE HAZARD RATIO
+```{r EM, echo=FALSE}
+ADF15$Summary.HR
+```
+
